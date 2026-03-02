@@ -43,7 +43,7 @@ The system consists of the following major components:
 5. **Scheme Knowledge Base**: Structured repository of scheme rules, requirements, and validation logic
 6. **Decision Generator**: Produces actionable outputs with readiness scores and next steps
 7. **Progress Tracker**: Maintains user state and completion tracking
-8. **Structured Output Service**: Formats and delivers results to users
+8. **Structured Output Service**: Formats and delivers results to users.
 
 ### Data Flow
 
