@@ -200,19 +200,14 @@ def _try_paddle(file_path: str, lang_code: str) -> Dict:
     try:
         from paddleocr import PaddleOCR
 
-        # PaddleOCR v3+ constructor
-        paddle_kwargs = {
-            "lang": lang_code,          # 'hi' or 'en'
-            "device": "cpu",            # replaces use_gpu
-            "enable_mkldnn": False,
-            "cpu_threads": 2,
-        }
-        if lang_code == "hi":
-            paddle_kwargs["text_recognition_model_name"] = "devanagari_PP-OCRv5_server_rec"
+        # Let Paddle auto-select correct models for the language
+        ocr = PaddleOCR(
+            lang=lang_code,
+            device="cpu",
+            enable_mkldnn=False,
+            cpu_threads=2,
+        )
 
-        ocr = PaddleOCR(**paddle_kwargs)
-
-        # v3 no longer needs cls=True
         raw = ocr.ocr(file_path)
 
         if not raw:
@@ -227,7 +222,6 @@ def _try_paddle(file_path: str, lang_code: str) -> Dict:
         texts = []
         confidences = []
 
-        # v3 returns: [[ [bbox], (text, confidence) ], ...]
         for page in raw:
             for item in page:
                 try:
@@ -273,6 +267,84 @@ def _try_paddle(file_path: str, lang_code: str) -> Dict:
             "blocks": [],
             "error": str(e)
         }
+
+# def _try_paddle(file_path: str, lang_code: str) -> Dict:
+#     try:
+#         from paddleocr import PaddleOCR
+
+#         # PaddleOCR v3+ constructor
+#         paddle_kwargs = {
+#             "lang": lang_code,          # 'hi' or 'en'
+#             "device": "cpu",            # replaces use_gpu
+#             "enable_mkldnn": False,
+#             "cpu_threads": 2,
+#         }
+#         if lang_code == "hi":
+#             paddle_kwargs["text_recognition_model_name"] = "devanagari_PP-OCRv5_server_rec"
+
+#         ocr = PaddleOCR(**paddle_kwargs)
+
+#         # v3 no longer needs cls=True
+#         raw = ocr.ocr(file_path)
+
+#         if not raw:
+#             return {
+#                 "text": "",
+#                 "confidence": 0.0,
+#                 "engine_used": "paddleocr",
+#                 "blocks": []
+#             }
+
+#         blocks = []
+#         texts = []
+#         confidences = []
+
+#         # v3 returns: [[ [bbox], (text, confidence) ], ...]
+#         for page in raw:
+#             for item in page:
+#                 try:
+#                     bbox = item[0]
+#                     text, conf = item[1]
+#                 except Exception:
+#                     continue
+
+#                 if not text or not text.strip():
+#                     continue
+
+#                 conf = float(conf)
+#                 if conf > 1:
+#                     conf = conf / 100.0
+
+#                 conf = max(0.0, min(1.0, conf))
+
+#                 blocks.append({
+#                     "text": text,
+#                     "confidence": conf,
+#                     "bbox": bbox,
+#                     "engine": "paddleocr"
+#                 })
+
+#                 texts.append(text)
+#                 confidences.append(conf)
+
+#         avg_conf = sum(confidences) / len(confidences) if confidences else 0.0
+
+#         return {
+#             "text": "\n".join(texts),
+#             "confidence": avg_conf,
+#             "engine_used": "paddleocr",
+#             "blocks": blocks
+#         }
+
+#     except Exception as e:
+#         log.exception("paddleocr.exception", error=str(e))
+#         return {
+#             "text": "",
+#             "confidence": 0.0,
+#             "engine_used": "paddleocr",
+#             "blocks": [],
+#             "error": str(e)
+#         }
 
 def _try_easyocr(file_path: str, lang_code: str) -> Dict:
     try:
