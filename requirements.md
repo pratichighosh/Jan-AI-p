@@ -144,4 +144,4 @@ The system will initially support a limited set of welfare schemes and document 
 2. WHEN the Bhashini_API fails, THE System SHALL retry the request up to 3 times before showing an error
 3. WHEN a document cannot be processed, THE System SHALL explain why and suggest corrective actions
 4. THE System SHALL log all errors with timestamps for troubleshooting purposes
-5. WHEN system services are temporarily unavailable, THE System SHALL display estimated time for service restoration
+5. WHEN system services are temporarily unavailable, THE System SHALL display estimated time for service restoration.
