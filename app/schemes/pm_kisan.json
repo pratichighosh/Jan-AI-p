@@ -1,0 +1,20 @@
+{
+  "scheme_id": "pm-kisan",
+  "display_name": "PM-KISAN",
+  "weights": {
+    "fields_complete": 0.6,
+    "docs_present": 0.3,
+    "validation_pass": 0.1
+  },
+  "required_fields": [
+    "applicant_name",
+    "father_name",
+    "aadhaar_number",
+    "mobile_number",
+    "bank_account",
+    "ifsc_code",
+    "khasra_number",
+    "land_area"
+  ],
+  "required_documents": ["aadhaar_card", "land_records", "bank_passbook"]
+}

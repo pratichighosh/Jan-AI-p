@@ -1,0 +1,17 @@
+{
+  "scheme_id": "ayushman-bharat",
+  "display_name": "Ayushman Bharat PM-JAY",
+  "weights": {
+    "fields_complete": 0.6,
+    "docs_present": 0.3,
+    "validation_pass": 0.1
+  },
+  "required_fields": [
+    "applicant_name",
+    "aadhaar_number",
+    "mobile_number",
+    "family_members",
+    "income_level"
+  ],
+  "required_documents": ["aadhaar_card", "ration_card", "income_certificate"]
+}

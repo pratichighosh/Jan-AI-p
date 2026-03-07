@@ -1,0 +1,17 @@
+{
+  "scheme_id": "pan-card",
+  "display_name": "PAN Card",
+  "weights": {
+    "fields_complete": 0.6,
+    "docs_present": 0.3,
+    "validation_pass": 0.1
+  },
+  "required_fields": [
+    "applicant_name",
+    "father_name",
+    "date_of_birth",
+    "aadhaar_number",
+    "mobile_number"
+  ],
+  "required_documents": ["identity_proof", "address_proof", "passport_photo"]
+}

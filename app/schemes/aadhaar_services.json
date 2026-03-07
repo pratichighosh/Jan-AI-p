@@ -1,0 +1,17 @@
+{
+  "scheme_id": "aadhaar-services",
+  "display_name": "Aadhaar Services",
+  "weights": {
+    "fields_complete": 0.6,
+    "docs_present": 0.3,
+    "validation_pass": 0.1
+  },
+  "required_fields": [
+    "aadhaar_number",
+    "applicant_name",
+    "date_of_birth",
+    "mobile_number",
+    "correction_field"
+  ],
+  "required_documents": ["identity_proof", "address_proof"]
+}

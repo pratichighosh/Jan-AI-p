@@ -1,10 +1,13 @@
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException
 from fastapi.responses import JSONResponse
+from pymongo import collection
 import uuid, structlog
 from app.core.preprocessing.image import enhance_image, assess_quality
 from app.core.ocr.engine import extract_text
 from app.core.analysis.classifier import classify_document
 from app.core.scoring.readiness import calculate_readiness_score
+from app.db.mongo import get_documents_collection
+
 
 router = APIRouter(tags=["documents"])
 log = structlog.get_logger()
@@ -106,7 +109,15 @@ async def upload_document(
             confidence=classification["confidence"])
 
     # Store result
-    _processing_store[document_id] = {
+    # Calculate readiness score
+    score_result = calculate_readiness_score(
+        ocr_result["text"],
+        classification["scheme_id"]
+    )
+
+    # Store result in MongoDB
+    collection = get_documents_collection()
+    document = {
         "document_id": document_id,
         "status": "OCR_COMPLETE",
         "language": language,
@@ -114,13 +125,13 @@ async def upload_document(
         "scheme_id_hint": scheme_id,
         "ocr_result": ocr_result,
         "quality": quality,
-        "filename": file.filename
+        "filename": file.filename,
+        "classification": classification,
+        "score_result": score_result,
     }
-    
-    _processing_store[document_id]["classification"] = classification
 
-    score_result = calculate_readiness_score(ocr_result["text"], classification["scheme_id"])
-    _processing_store[document_id]["score_result"] = score_result
+    await collection.insert_one(document)
+
     
     return {
         "success": True,
@@ -145,7 +156,12 @@ async def upload_document(
 @router.get("/documents/{document_id}/ocr")
 async def get_ocr_result(document_id: str):
     """Get raw OCR result for a document."""
-    doc = _processing_store.get(document_id)
+    collection = get_documents_collection()
+    doc = await collection.find_one({"document_id": document_id})
     if not doc:
-        raise HTTPException(status_code=404, detail={"code": "DOCUMENT_NOT_FOUND"})
-    return {"success": True, "data": doc["ocr_result"]}
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "DOCUMENT_NOT_FOUND", "message": "Document not found"}
+        )
+
+    return {"success": True, "data": doc.get("ocr_result", {})}

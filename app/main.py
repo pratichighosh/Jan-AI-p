@@ -3,6 +3,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 import structlog
 
+from app.api.upload import router as upload_router
+from app.api.analysis import router as analysis_router
+from app.api.progress import router as progress_router
+# from app.api.guidance import router as guidance_router
+
 log = structlog.get_logger()
 
 
@@ -17,7 +22,7 @@ app = FastAPI(
     title="CAIS — Citizen Application Intelligence System",
     version="1.0.0",
     description="AI-powered government document analysis for Indian citizens",
-    lifespan=lifespan
+    lifespan=lifespan,
 )
 
 app.add_middleware(
@@ -27,13 +32,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Import routers — uncomment as you build them
-from app.api.upload import router as upload_router
-# from app.api.analysis import router as analysis_router
-# from app.api.guidance import router as guidance_router
-# from app.api.progress import router as progress_router
+# Routers
 app.include_router(upload_router, prefix="/api/v1")
-# app.include_router(analysis_router, prefix="/api/v1")
+app.include_router(analysis_router, prefix="/api/v1")
+app.include_router(progress_router, prefix="/api/v1")
+# app.include_router(guidance_router, prefix="/api/v1")
 
 
 @app.get("/health")

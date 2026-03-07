@@ -1,0 +1,17 @@
+{
+  "scheme_id": "ration-card",
+  "display_name": "Ration Card",
+  "weights": {
+    "fields_complete": 0.6,
+    "docs_present": 0.3,
+    "validation_pass": 0.1
+  },
+  "required_fields": [
+    "applicant_name",
+    "father_name",
+    "address",
+    "family_members",
+    "mobile_number"
+  ],
+  "required_documents": ["aadhaar_card", "address_proof", "passport_photo"]
+}

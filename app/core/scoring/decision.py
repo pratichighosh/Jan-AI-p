@@ -1,349 +1,256 @@
-import re
-from typing import List, Dict, Optional, Tuple
-from datetime import datetime, timedelta
-import structlog
-from uuid import uuid4
+from typing import List, Dict
 
-from app.models.decision import ActionItem, ActionStep, DeadlineInfo, DecisionOutput
 
-log = structlog.get_logger()
-
-# Field guidance for action items (expandable)
-FIELD_GUIDANCE = {
-    "pm-kisan": {
-        "aadhaar_number": {
-            "title": "Aadhaar Number",
-            "title_hi": "आधार संख्या",
-            "description": "Enter your 12-digit Aadhaar number",
-            "description_hi": "अपना 12 अंकों का आधार नंबर दर्ज करें",
-            "steps": [
-                {"step_number": 1, "description": "Find your Aadhaar card", "description_hi": "अपना आधार कार्ड खोजें"},
-                {"step_number": 2, "description": "Enter the 12-digit number", "description_hi": "12 अंकों की संख्या दर्ज करें"},
-                {"step_number": 3, "description": "Format: XXXX XXXX XXXX", "description_hi": "प्रारूप: XXXX XXXX XXXX"}
-            ]
-        },
-        "bank_account": {
-            "title": "Bank Account Number",
-            "title_hi": "बैंक खाता संख्या",
-            "description": "Enter your bank account number for direct benefit transfer",
-            "description_hi": "सीधे लाभ हस्तांतरण के लिए अपना बैंक खाता नंबर दर्ज करें",
-            "steps": [
-                {"step_number": 1, "description": "Check your bank passbook or cheque", "description_hi": "अपनी बैंक पासबुक या चेक देखें"},
-                {"step_number": 2, "description": "Enter account number carefully", "description_hi": "खाता संख्या ध्यान से दर्ज करें"}
-            ]
-        },
-        "khasra_number": {
-            "title": "Khasra Number",
-            "title_hi": "खसरा संख्या",
-            "description": "Enter land record number from your land documents",
-            "description_hi": "अपने भूमि दस्तावेजों से भूमि रिकॉर्ड संख्या दर्ज करें",
-            "steps": [
-                {"step_number": 1, "description": "Get land ownership documents", "description_hi": "भूमि स्वामित्व दस्तावेज़ प्राप्त करें"},
-                {"step_number": 2, "description": "Find khasra number on documents", "description_hi": "दस्तावेजों पर खसरा नंबर खोजें"}
-            ]
-        }
-    },
-    "ayushman-bharat": {
-        "aadhaar_number": {
-            "title": "Aadhaar Number",
-            "title_hi": "आधार संख्या",
-            "description": "Enter your 12-digit Aadhaar number for health coverage",
-            "description_hi": "स्वास्थ्य कवरेज के लिए अपना 12 अंकों का आधार नंबर दर्ज करें",
-            "steps": [
-                {"step_number": 1, "description": "Keep Aadhaar card ready", "description_hi": "आधार कार्ड तैयार रखें"},
-                {"step_number": 2, "description": "Enter 12-digit number", "description_hi": "12 अंकों की संख्या दर्ज करें"}
-            ]
-        },
-        "family_members": {
-            "title": "Family Members Count",
-            "title_hi": "परिवार के सदस्यों की संख्या",
-            "description": "Enter total family members to be covered",
-            "description_hi": "कवर किए जाने वाले कुल परिवार के सदस्यों को दर्ज करें",
-            "steps": [
-                {"step_number": 1, "description": "Count all family members", "description_hi": "सभी परिवार के सदस्यों को गिनें"},
-                {"step_number": 2, "description": "Include dependents", "description_hi": "आश्रितों को शामिल करें"}
-            ]
-        }
-    },
-    # Add more schemes as needed
+# Estimated time to complete each action
+ESTIMATED_TIME: Dict[str, str] = {
+    # Field actions
+    "field_applicant_name":   "5 minutes",
+    "field_father_name":      "5 minutes",
+    "field_date_of_birth":    "5 minutes",
+    "field_aadhaar_number":   "5 minutes",
+    "field_mobile_number":    "5 minutes",
+    "field_bank_account":     "10 minutes",
+    "field_ifsc_code":        "10 minutes",
+    "field_khasra_number":    "15 minutes",
+    "field_land_area":        "15 minutes",
+    "field_family_members":   "5 minutes",
+    "field_income_level":     "10 minutes",
+    "field_pension_type":     "5 minutes",
+    "field_correction_field": "10 minutes",
+    "field_address":          "10 minutes",
+    # Document actions
+    "doc_aadhaar_card":        "1 day",
+    "doc_land_records":        "3-5 days",
+    "doc_bank_passbook":       "1 day",
+    "doc_ration_card":         "3-5 days",
+    "doc_income_certificate":  "3-7 days",
+    "doc_address_proof":       "1-2 days",
+    "doc_identity_proof":      "1-2 days",
+    "doc_passport_photo":      "1 day",
+    "doc_age_proof":           "2-3 days",
 }
 
-DOCUMENT_GUIDANCE = {
-    "land_records": {
-        "title": "Land Ownership Documents",
-        "title_hi": "भूमि स्वामित्व दस्तावेज़",
-        "description": "Upload land records showing ownership and khasra number",
-        "description_hi": "स्वामित्व और खसरा नंबर दिखाने वाले भूमि रिकॉर्ड अपलोड करें",
-        "steps": [
-            {"step_number": 1, "description": "Get land records from tehsil office or online portal", "description_hi": "तहसील कार्यालय या ऑनलाइन पोर्टल से भूमि रिकॉर्ड प्राप्त करें"},
-            {"step_number": 2, "description": "Scan or photograph clearly", "description_hi": "स्पष्ट रूप से स्कैन या फोटो लें"},
-            {"step_number": 3, "description": "Upload PDF or image", "description_hi": "PDF या छवि अपलोड करें"}
-        ]
+
+FIELD_HINTS: Dict[str, Dict[str, str]] = {
+    "applicant_name": {
+        "title_hi": "आवेदक का नाम भरें",
+        "title_en": "Fill applicant name",
+        "hint_hi": "फॉर्म में जहाँ 'Applicant Name' या 'आवेदक का नाम' लिखा है, अपना पूरा नाम जैसा दस्तावेज़ों में है वैसा भरें।",
+        "hint_en": "Enter your full name exactly as it appears on your official documents.",
     },
+    "father_name": {
+        "title_hi": "पिता का नाम भरें",
+        "title_en": "Fill father's name",
+        "hint_hi": "फॉर्म में पिता/पति का नाम पूछा हो तो पूरा नाम साफ-साफ लिखें।",
+        "hint_en": "Write your father's (or husband's) full name clearly where asked.",
+    },
+    "aadhaar_number": {
+        "title_hi": "आधार नंबर दर्ज करें",
+        "title_en": "Enter Aadhaar number",
+        "hint_hi": "12 अंकों का आधार नंबर बिना गलती के भरें।",
+        "hint_en": "Enter your 12-digit Aadhaar number carefully, matching your Aadhaar card.",
+    },
+    "mobile_number": {
+        "title_hi": "मोबाइल नंबर भरें",
+        "title_en": "Fill mobile number",
+        "hint_hi": "ऐसा मोबाइल नंबर लिखें जो आपके नाम पर हो और OTP रिसीव कर सके।",
+        "hint_en": "Use a mobile number that is active and can receive OTP messages.",
+    },
+    "bank_account": {
+        "title_hi": "बैंक खाता विवरण भरें",
+        "title_en": "Fill bank account details",
+        "hint_hi": "सही खाता संख्या लिखें, पासबुक या बैंक स्टेटमेंट से कॉपी करें।",
+        "hint_en": "Copy the account number from your bank passbook or statement.",
+    },
+    "ifsc_code": {
+        "title_hi": "IFSC कोड भरें",
+        "title_en": "Fill IFSC code",
+        "hint_hi": "ब्रांच का IFSC कोड पासबुक या बैंक वेबसाइट से देखें।",
+        "hint_en": "Use the IFSC printed on your passbook or bank's official website.",
+    },
+    "khasra_number": {
+        "title_hi": "खसरा नंबर भरें",
+        "title_en": "Fill Khasra number",
+        "hint_hi": "राजस्व रिकॉर्ड/खसरा-खतौनी से नंबर कॉपी करें।",
+        "hint_en": "Copy the Khasra number from official land records, not from memory.",
+    },
+    "land_area": {
+        "title_hi": "भूमि का क्षेत्रफल भरें",
+        "title_en": "Fill land area",
+        "hint_hi": "कितनी भूमि आपके नाम है (हेक्टेयर/एकड़) सही-सही भरें।",
+        "hint_en": "Enter the land area in hectares/acres as per your land record.",
+    },
+    "family_members": {
+        "title_hi": "परिवार के सदस्यों की संख्या भरें",
+        "title_en": "Fill number of family members",
+        "hint_hi": "परिवार में कुल कितने सदस्य हैं, वो संख्या सही-सही भरें।",
+        "hint_en": "Enter the total number of members in your household.",
+    },
+    "income_level": {
+        "title_hi": "वार्षिक आय भरें",
+        "title_en": "Fill annual income",
+        "hint_hi": "परिवार की कुल वार्षिक आय रुपयों में भरें।",
+        "hint_en": "Enter your total annual household income in rupees.",
+    },
+    "pension_type": {
+        "title_hi": "पेंशन का प्रकार चुनें",
+        "title_en": "Select pension type",
+        "hint_hi": "वृद्धावस्था, विधवा, या विकलांगता में से सही पेंशन प्रकार चुनें।",
+        "hint_en": "Select the correct pension type: old age, widow, or disability.",
+    },
+    "correction_field": {
+        "title_hi": "सुधार का विवरण भरें",
+        "title_en": "Fill correction details",
+        "hint_hi": "आधार में जो सुधार चाहिए उसका विवरण सही-सही भरें।",
+        "hint_en": "Specify which field needs correction in your Aadhaar.",
+    },
+    "date_of_birth": {
+        "title_hi": "जन्म तिथि भरें",
+        "title_en": "Fill date of birth",
+        "hint_hi": "जन्म तिथि DD/MM/YYYY फॉर्मेट में आधार कार्ड के अनुसार भरें।",
+        "hint_en": "Enter your date of birth in DD/MM/YYYY format as per Aadhaar.",
+    },
+    "address": {
+        "title_hi": "पता भरें",
+        "title_en": "Fill address",
+        "hint_hi": "पूरा पता जैसा आधार या पते के प्रमाण पर है वैसा भरें।",
+        "hint_en": "Enter your full address exactly as on your address proof document.",
+    },
+}
+
+
+DOCUMENT_HINTS: Dict[str, Dict[str, str]] = {
     "aadhaar_card": {
-        "title": "Aadhaar Card",
-        "title_hi": "आधार कार्ड",
-        "description": "Upload clear photo or scan of Aadhaar card",
-        "description_hi": "आधार कार्ड की स्पष्ट फोटो या स्कैन अपलोड करें",
-        "steps": [
-            {"step_number": 1, "description": "Place Aadhaar on flat surface", "description_hi": "आधार को समतल सतह पर रखें"},
-            {"step_number": 2, "description": "Take clear photo in good lighting", "description_hi": "अच्छी रोशनी में स्पष्ट फोटो लें"},
-            {"step_number": 3, "description": "Upload both front and back if required", "description_hi": "यदि आवश्यक हो तो आगे और पीछे दोनों अपलोड करें"}
-        ]
+        "title_hi": "आधार कार्ड की कॉपी जोड़ें",
+        "title_en": "Attach Aadhaar card copy",
+        "hint_hi": "आधार कार्ड की साफ फोटो या स्कैन PDF अपलोड करें।",
+        "hint_en": "Upload a clear photo or PDF scan of your Aadhaar card with the number visible.",
+    },
+    "land_records": {
+        "title_hi": "भूमि रिकॉर्ड (खसरा/खतौनी) जोड़ें",
+        "title_en": "Attach land record",
+        "hint_hi": "तहसील या ऑनलाइन पोर्टल से खसरा/खतौनी की प्रति लें और अपलोड करें।",
+        "hint_en": "Obtain a copy of your land record from tehsil/online portal and upload it.",
     },
     "bank_passbook": {
-        "title": "Bank Passbook",
-        "title_hi": "बैंक पासबुक",
-        "description": "Upload first page of bank passbook showing account details",
-        "description_hi": "खाता विवरण दिखाने वाली बैंक पासबुक का पहला पेज अपलोड करें",
-        "steps": [
-            {"step_number": 1, "description": "Open first page of passbook", "description_hi": "पासबुक का पहला पेज खोलें"},
-            {"step_number": 2, "description": "Ensure account number and IFSC are visible", "description_hi": "सुनिश्चित करें कि खाता संख्या और IFSC दिखाई दें"},
-            {"step_number": 3, "description": "Upload clear image", "description_hi": "स्पष्ट छवि अपलोड करें"}
-        ]
+        "title_hi": "बैंक पासबुक की कॉपी जोड़ें",
+        "title_en": "Attach bank passbook copy",
+        "hint_hi": "पासबुक के पहले पेज की साफ फोटो लें जिसमें नाम, खाता संख्या और IFSC दिखे।",
+        "hint_en": "Upload a clear photo of the first page showing name, account number, and IFSC.",
     },
     "income_certificate": {
-        "title": "Income Certificate",
-        "title_hi": "आय प्रमाण पत्र",
-        "description": "Upload income certificate from competent authority",
-        "description_hi": "सक्षम प्राधिकारी से आय प्रमाण पत्र अपलोड करें",
-        "steps": [
-            {"step_number": 1, "description": "Get income certificate from tehsildar", "description_hi": "तहसीलदार से आय प्रमाण पत्र प्राप्त करें"},
-            {"step_number": 2, "description": "Scan the document", "description_hi": "दस्तावेज़ को स्कैन करें"},
-            {"step_number": 3, "description": "Upload PDF or image", "description_hi": "PDF या छवि अपलोड करें"}
-        ]
-    }
+        "title_hi": "आय प्रमाण पत्र जोड़ें",
+        "title_en": "Attach income certificate",
+        "hint_hi": "तहसील/CSC से नवीनतम आय प्रमाण पत्र बनवाकर उसकी कॉपी अपलोड करें।",
+        "hint_en": "Get a recent income certificate from tehsil/CSC and upload its scan.",
+    },
+    "ration_card": {
+        "title_hi": "राशन कार्ड की कॉपी जोड़ें",
+        "title_en": "Attach ration card copy",
+        "hint_hi": "परिवार के राशन कार्ड की कॉपी अपलोड करें।",
+        "hint_en": "Upload a copy of your family ration card showing all household members.",
+    },
+    "address_proof": {
+        "title_hi": "पते का प्रमाण जोड़ें",
+        "title_en": "Attach address proof",
+        "hint_hi": "बिजली बिल, राशन कार्ड, या आधार पते का प्रमाण अपलोड करें।",
+        "hint_en": "Upload electricity bill, ration card, or Aadhaar as address proof.",
+    },
+    "identity_proof": {
+        "title_hi": "पहचान प्रमाण जोड़ें",
+        "title_en": "Attach identity proof",
+        "hint_hi": "आधार, पैन, या वोटर ID में से कोई एक पहचान प्रमाण अपलोड करें।",
+        "hint_en": "Upload Aadhaar, PAN, or Voter ID as identity proof.",
+    },
+    "passport_photo": {
+        "title_hi": "पासपोर्ट साइज़ फोटो जोड़ें",
+        "title_en": "Attach passport size photo",
+        "hint_hi": "हाल की पासपोर्ट साइज़ फोटो अपलोड करें।",
+        "hint_en": "Upload a recent passport size photograph with white background.",
+    },
+    "age_proof": {
+        "title_hi": "आयु प्रमाण जोड़ें",
+        "title_en": "Attach age proof",
+        "hint_hi": "जन्म प्रमाण पत्र या आधार आयु प्रमाण के रूप में अपलोड करें।",
+        "hint_en": "Upload birth certificate or Aadhaar as age proof.",
+    },
 }
 
 
-def extract_deadline(ocr_text: str) -> Optional[DeadlineInfo]:
-    """
-    Extract deadline information from OCR text.
-    Looks for common patterns like:
-    - "Last date: DD/MM/YYYY"
-    - "अंतिम तिथि: DD/MM/YYYY"
-    - "Deadline: DD-MM-YYYY"
-    """
-    deadline_patterns = [
-        r"(?:last date|अंतिम तिथि|deadline)[:\s]+(\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{4})",
-        r"(?:submit by|before|तक)[:\s]+(\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{4})",
-        r"(\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{4})(?:\s+तक|\ before)"
-    ]
-    
-    for pattern in deadline_patterns:
-        match = re.search(pattern, ocr_text, re.IGNORECASE)
-        if match:
-            date_str = match.group(1)
-            try:
-                # Try different date formats
-                for fmt in ["%d/%m/%Y", "%d-%m-%Y", "%d.%m.%Y"]:
-                    try:
-                        deadline_date = datetime.strptime(date_str, fmt)
-                        days_remaining = (deadline_date - datetime.now()).days
-                        
-                        return DeadlineInfo(
-                            has_deadline=True,
-                            deadline_date=deadline_date,
-                            days_remaining=days_remaining,
-                            deadline_text=date_str,
-                            is_urgent=(days_remaining < 7)
-                        )
-                    except ValueError:
-                        continue
-            except Exception as e:
-                log.warning("deadline_parse_failed", error=str(e))
-                continue
-    
-    return DeadlineInfo(has_deadline=False)
+def _base_priority_for_field(field_id: str) -> int:
+    critical = {"aadhaar_number", "bank_account", "ifsc_code"}
+    contact = {"mobile_number"}
+    if field_id in critical:
+        return 1
+    if field_id in contact:
+        return 2
+    return 3
 
 
-def calculate_field_priority(
-    field_name: str,
-    scheme_id: str,
-    deadline_info: Optional[DeadlineInfo] = None
-) -> int:
-    """
-    Calculate priority for a missing field (1 = highest, 10 = lowest).
-    
-    Priority factors:
-    - Critical fields (aadhaar, bank account): priority 1-2
-    - Required fields: priority 3-5
-    - Optional fields: priority 6-10
-    - Urgent deadline: -2 priority (higher)
-    """
-    # Critical fields
-    critical_fields = ["aadhaar_number", "pan_number", "bank_account", "applicant_name"]
-    if field_name in critical_fields:
-        priority = 1
-    else:
-        priority = 4
-    
-    # Adjust for deadline urgency
-    if deadline_info and deadline_info.is_urgent:
-        priority = max(1, priority - 2)
-    
-    return priority
-
-
-def generate_field_action_item(
-    field_name: str,
-    scheme_id: str,
-    priority: int,
-    deadline_info: Optional[DeadlineInfo] = None
-) -> ActionItem:
-    """
-    Generate action item for a missing field.
-    """
-    guidance = FIELD_GUIDANCE.get(scheme_id, {}).get(
-        field_name,
-        {
-            "title": field_name.replace("_", " ").title(),
-            "title_hi": field_name.replace("_", " "),
-            "description": f"Fill in the {field_name.replace('_', ' ')} field",
-            "description_hi": f"{field_name.replace('_', ' ')} फ़ील्ड भरें",
-            "steps": []
-        }
-    )
-    
-    steps = [
-        ActionStep(**step) for step in guidance.get("steps", [])
-    ]
-    
-    return ActionItem(
-        id=f"field_{uuid4().hex[:8]}",
-        title=guidance["title"],
-        title_hi=guidance["title_hi"],
-        description=guidance["description"],
-        description_hi=guidance["description_hi"],
-        category="FILL_FIELD",
-        priority=priority,
-        field_name=field_name,
-        steps=steps,
-        deadline=deadline_info.deadline_date if deadline_info and deadline_info.has_deadline else None
-    )
-
-
-def generate_document_action_item(
-    document_type: str,
-    scheme_id: str,
-    priority: int,
-    deadline_info: Optional[DeadlineInfo] = None
-) -> ActionItem:
-    """
-    Generate action item for a missing document.
-    """
-    guidance = DOCUMENT_GUIDANCE.get(
-        document_type,
-        {
-            "title": document_type.replace("_", " ").title(),
-            "title_hi": document_type.replace("_", " "),
-            "description": f"Upload {document_type.replace('_', ' ')}",
-            "description_hi": f"{document_type.replace('_', ' ')} अपलोड करें",
-            "steps": []
-        }
-    )
-    
-    steps = [
-        ActionStep(**step) for step in guidance.get("steps", [])
-    ]
-    
-    return ActionItem(
-        id=f"doc_{uuid4().hex[:8]}",
-        title=guidance["title"],
-        title_hi=guidance["title_hi"],
-        description=guidance["description"],
-        description_hi=guidance["description_hi"],
-        category="UPLOAD_DOCUMENT",
-        priority=priority + 1,  # Documents slightly lower priority than fields
-        document_type=document_type,
-        steps=steps,
-        deadline=deadline_info.deadline_date if deadline_info and deadline_info.has_deadline else None
-    )
+def _base_priority_for_document(doc_id: str) -> int:
+    critical_docs = {"aadhaar_card", "land_records", "bank_passbook"}
+    if doc_id in critical_docs:
+        return 1
+    return 3
 
 
 def generate_action_items(
+    scheme_id: str,
     missing_fields: List[str],
     missing_documents: List[str],
-    scheme_id: str,
-    ocr_text: str
-) -> Tuple[List[ActionItem], Optional[DeadlineInfo]]:
+    language: str = "hi",
+) -> List[Dict]:
     """
-    Generate prioritized action items based on missing fields and documents.
+    Turn missing fields and documents into user-friendly action items
+    with estimated time to complete each.
     """
-    # Extract deadline
-    deadline_info = extract_deadline(ocr_text)
-    
-    action_items = []
-    
-    # Generate field action items
-    for field in missing_fields:
-        priority = calculate_field_priority(field, scheme_id, deadline_info)
-        action = generate_field_action_item(field, scheme_id, priority, deadline_info)
-        action_items.append(action)
-    
-    # Generate document action items
-    for doc in missing_documents:
-        priority = calculate_field_priority(doc, scheme_id, deadline_info)
-        action = generate_document_action_item(doc, scheme_id, priority, deadline_info)
-        action_items.append(action)
-    
-    # Sort by priority
-    action_items.sort(key=lambda x: x.priority)
-    
-    return action_items, deadline_info
+    actions: List[Dict] = []
+    lang_hi = language.startswith("hi")
 
+    # Field-based actions
+    for field_id in missing_fields:
+        action_id = f"field_{field_id}"
+        meta = FIELD_HINTS.get(field_id)
+        if not meta:
+            title = "एक आवश्यक फ़ील्ड भरें" if lang_hi else "Fill a required field"
+            desc = f"फ़ील्ड '{field_id}' फॉर्म में नहीं मिली।" if lang_hi \
+                else f"The field '{field_id}' is missing in the form, please fill it."
+        else:
+            title = meta["title_hi"] if lang_hi else meta["title_en"]
+            desc = meta["hint_hi"] if lang_hi else meta["hint_en"]
 
-def create_decision_output(
-    document_id: str,
-    scheme_id: str,
-    readiness_score: int,
-    risk_level: str,
-    missing_fields: List[str],
-    missing_documents: List[str],
-    ocr_text: str
-) -> DecisionOutput:
-    """
-    Create complete decision output with action items.
-    """
-    # Generate action items
-    action_items, deadline_info = generate_action_items(
-        missing_fields, missing_documents, scheme_id, ocr_text
-    )
-    
-    # Create summary
-    total_actions = len(action_items)
-    if total_actions == 0:
-        summary = "Your application appears complete. Review and submit."
-        summary_hi = "आपका आवेदन पूर्ण दिखाई देता है। समीक्षा करें और जमा करें।"
-    else:
-        summary = f"Complete {total_actions} action items to improve your application readiness."
-        summary_hi = f"अपने आवेदन की तैयारी में सुधार के लिए {total_actions} कार्य आइटम पूरे करें।"
-    
-    # Estimate completion time
-    estimated_time = f"{total_actions * 5} minutes" if total_actions > 0 else "0 minutes"
-    
-    # Scheme name mapping
-    scheme_names = {
-        "pm-kisan": {"en": "PM-KISAN", "hi": "पीएम किसान"},
-        "ayushman-bharat": {"en": "Ayushman Bharat", "hi": "आयुष्मान भारत"},
-        "ration-card": {"en": "Ration Card", "hi": "राशन कार्ड"},
-        "aadhaar-services": {"en": "Aadhaar Services", "hi": "आधार सेवाएं"},
-        "social-pension": {"en": "Social Pension", "hi": "सामाजिक पेंशन"},
-        "pan-card": {"en": "PAN Card", "hi": "पैन कार्ड"},
-    }
-    
-    scheme_info = scheme_names.get(scheme_id, {"en": scheme_id, "hi": scheme_id})
-    
-    return DecisionOutput(
-        document_id=document_id,
-        scheme_id=scheme_id,
-        scheme_name=scheme_info["en"],
-        scheme_name_hi=scheme_info["hi"],
-        readiness_score=readiness_score,
-        risk_level=risk_level,
-        action_items=action_items,
-        deadline_info=deadline_info,
-        next_steps_summary=summary,
-        next_steps_summary_hi=summary_hi,
-        estimated_completion_time=estimated_time
-    )
+        actions.append({
+            "action_id": action_id,
+            "title": title,
+            "description": desc,
+            "priority": _base_priority_for_field(field_id),
+            "category": "FILL_FIELD",
+            "scheme_id": scheme_id,
+            "estimated_time": ESTIMATED_TIME.get(action_id, "10 minutes"),
+        })
+
+    # Document-based actions
+    for doc_id in missing_documents:
+        action_id = f"doc_{doc_id}"
+        meta = DOCUMENT_HINTS.get(doc_id)
+        if not meta:
+            title = "आवश्यक दस्तावेज़ अपलोड करें" if lang_hi else "Upload required document"
+            desc = f"दस्तावेज़ '{doc_id}' नहीं मिला।" if lang_hi \
+                else f"The document '{doc_id}' is missing, please upload a clear copy."
+        else:
+            title = meta["title_hi"] if lang_hi else meta["title_en"]
+            desc = meta["hint_hi"] if lang_hi else meta
+    actions.append({
+        "action_id": action_id,
+        "title": title,
+        "description": desc,
+        "priority": _base_priority_for_document(doc_id),
+        "category": "UPLOAD_DOCUMENT",
+        "scheme_id": scheme_id,
+        "estimated_time": ESTIMATED_TIME.get(action_id, "1-2 days"),
+   })
+
+    # Sort: priority asc, fields before documents at same priority
+    actions.sort(key=lambda a: (a["priority"], a["category"]))
+    return actions
+

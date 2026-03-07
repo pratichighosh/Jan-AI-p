@@ -1,0 +1,23 @@
+{
+  "scheme_id": "social-pension",
+  "display_name": "Social Pension",
+  "weights": {
+    "fields_complete": 0.6,
+    "docs_present": 0.3,
+    "validation_pass": 0.1
+  },
+  "required_fields": [
+    "applicant_name",
+    "date_of_birth",
+    "aadhaar_number",
+    "bank_account",
+    "ifsc_code",
+    "pension_type"
+  ],
+  "required_documents": [
+    "aadhaar_card",
+    "age_proof",
+    "bank_passbook",
+    "income_certificate"
+  ]
+}
