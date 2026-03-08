@@ -1,23 +1,9 @@
-from sentence_transformers import SentenceTransformer, util
 from typing import List, Dict, Any, Optional
-import torch
 
-# Use a small, fast model that works well on CPU
 MODEL_NAME = "paraphrase-MiniLM-L6-v2"
+_model = None
+_corpus_embeddings = None
 
-_model: Optional[SentenceTransformer] = None
-
-
-def get_model() -> SentenceTransformer:
-    """Lazy load model on first use."""
-    global _model
-    if _model is None:
-        _model = SentenceTransformer(MODEL_NAME)
-    return _model
-
-
-# Canonical rejection reason sentences
-# These are the "ground truth" sentences we compare against
 REJECTION_REASON_CORPUS = [
     {
         "reason_id": "incomplete_form",
@@ -113,102 +99,90 @@ REJECTION_REASON_CORPUS = [
 ]
 
 
-# Pre-compute corpus embeddings at import time (lazy)
-_corpus_embeddings = None
+def get_model():
+    global _model
+    if _model is None:
+        try:
+            from sentence_transformers import SentenceTransformer
+            _model = SentenceTransformer(MODEL_NAME)
+        except Exception:
+            _model = None
+    return _model
 
 
 def _get_corpus_embeddings():
-    """Compute and cache corpus embeddings."""
     global _corpus_embeddings
     if _corpus_embeddings is None:
         model = get_model()
-        sentences = [r["canonical"] for r in REJECTION_REASON_CORPUS]
-        _corpus_embeddings = model.encode(sentences, convert_to_tensor=True)
+        if model is None:
+            return None
+        try:
+            sentences = [r["canonical"] for r in REJECTION_REASON_CORPUS]
+            _corpus_embeddings = model.encode(sentences, convert_to_tensor=True)
+        except Exception:
+            return None
     return _corpus_embeddings
 
 
 def find_similar_rejection_reasons(
     text: str,
-    threshold: float = 0.40,   # lowered from 0.45
+    threshold: float = 0.40,
     top_k: int = 5,
 ) -> List[Dict[str, Any]]:
-
-    """
-    Find rejection reasons semantically similar to the input text.
-
-    Uses sentence-transformers cosine similarity against
-    canonical rejection reason sentences.
-
-    threshold: minimum similarity score (0-1) to include a result.
-    top_k: maximum number of reasons to return.
-    """
     if not text or len(text.strip()) < 10:
         return []
-
-    model = get_model()
-    corpus_embeddings = _get_corpus_embeddings()
-
-    # Encode input
-    query_embedding = model.encode(text, convert_to_tensor=True)
-
-    # Compute cosine similarity
-    cosine_scores = util.cos_sim(query_embedding, corpus_embeddings)[0]
-
-    # Get top matches above threshold
-    scores = cosine_scores.tolist()
-    results = []
-
-    for idx, score in enumerate(scores):
-        if score >= threshold:
-            reason = REJECTION_REASON_CORPUS[idx]
-            results.append({
-                "reason_id": reason["reason_id"],
-                "title": reason["title"],
-                "remediation": reason["remediation"],
-                "priority": reason["priority"],
-                "similarity_score": round(score, 3),
-                "action_id": f"rejection_{reason['reason_id']}",
-            })
-
-    # Sort by similarity score descending
-    results.sort(key=lambda x: x["similarity_score"], reverse=True)
-    return results[:top_k]
+    try:
+        from sentence_transformers import util
+        model = get_model()
+        if model is None:
+            return []
+        corpus_embeddings = _get_corpus_embeddings()
+        if corpus_embeddings is None:
+            return []
+        query_embedding = model.encode(text, convert_to_tensor=True)
+        cosine_scores = util.cos_sim(query_embedding, corpus_embeddings)[0]
+        scores = cosine_scores.tolist()
+        results = []
+        for idx, score in enumerate(scores):
+            if score >= threshold:
+                reason = REJECTION_REASON_CORPUS[idx]
+                results.append({
+                    "reason_id": reason["reason_id"],
+                    "title": reason["title"],
+                    "remediation": reason["remediation"],
+                    "priority": reason["priority"],
+                    "similarity_score": round(score, 3),
+                    "action_id": f"rejection_{reason['reason_id']}",
+                })
+        results.sort(key=lambda x: x["similarity_score"], reverse=True)
+        return results[:top_k]
+    except Exception:
+        return []
 
 
 def semantic_extract_rejection_reasons(
     ocr_text: str,
     threshold: float = 0.45,
 ) -> List[Dict[str, Any]]:
-    """
-    Split OCR text into sentences and find rejection reasons
-    semantically for each sentence.
-
-    Combines results, deduplicates by reason_id,
-    keeps highest similarity score per reason.
-    """
     if not ocr_text:
         return []
-
-    # Split into sentences
-    sentences = [
-        s.strip()
-        for s in ocr_text.replace("\n", ". ").split(".")
-        if len(s.strip()) > 15
-    ]
-
-    seen_reason_ids = {}
-
-    for sentence in sentences:
-        matches = find_similar_rejection_reasons(sentence, threshold=threshold)
-        for match in matches:
-            rid = match["reason_id"]
-            if rid not in seen_reason_ids:
-                seen_reason_ids[rid] = match
-            else:
-                # Keep highest similarity score
-                if match["similarity_score"] > seen_reason_ids[rid]["similarity_score"]:
+    try:
+        sentences = [
+            s.strip()
+            for s in ocr_text.replace("\n", ". ").split(".")
+            if len(s.strip()) > 15
+        ]
+        seen_reason_ids = {}
+        for sentence in sentences:
+            matches = find_similar_rejection_reasons(sentence, threshold=threshold)
+            for match in matches:
+                rid = match["reason_id"]
+                if rid not in seen_reason_ids:
                     seen_reason_ids[rid] = match
-
-    results = list(seen_reason_ids.values())
-    results.sort(key=lambda x: (x["priority"], -x["similarity_score"]))
-    return results
+                elif match["similarity_score"] > seen_reason_ids[rid]["similarity_score"]:
+                    seen_reason_ids[rid] = match
+        results = list(seen_reason_ids.values())
+        results.sort(key=lambda x: (x["priority"], -x["similarity_score"]))
+        return results
+    except Exception:
+        return []

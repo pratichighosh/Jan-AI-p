@@ -1,25 +1,12 @@
-import torch
-from sentence_transformers import SentenceTransformer, util
-from typing import Dict, Any, Optional
 import structlog
+from typing import Dict, Any, Optional
 
 log = structlog.get_logger()
 
-# Multilingual model supporting Hindi + all Indian languages
-# Already downloaded when you installed sentence-transformers
 MODEL_NAME = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
-
-_model: Optional[SentenceTransformer] = None
-
-
-def get_model() -> SentenceTransformer:
-    global _model
-    if _model is None:
-        log.info("indic_bert.loading_model", model=MODEL_NAME)
-        _model = SentenceTransformer(MODEL_NAME)
-        log.info("indic_bert.model_loaded")
-    return _model
-
+_model = None
+_scheme_embeddings = None
+_doc_type_embeddings = None
 
 SCHEME_DESCRIPTIONS = {
     "pm-kisan": (
@@ -91,16 +78,32 @@ DOCUMENT_TYPE_DESCRIPTIONS = {
     ),
 }
 
-_scheme_embeddings = None
-_doc_type_embeddings = None
+
+def get_model():
+    global _model
+    if _model is None:
+        try:
+            from sentence_transformers import SentenceTransformer
+            log.info("indic_bert.loading_model", model=MODEL_NAME)
+            _model = SentenceTransformer(MODEL_NAME)
+            log.info("indic_bert.model_loaded")
+        except Exception as e:
+            log.error("indic_bert.load_failed", error=str(e))
+            _model = None
+    return _model
 
 
 def _get_scheme_embeddings():
     global _scheme_embeddings
     if _scheme_embeddings is None:
         model = get_model()
-        texts = list(SCHEME_DESCRIPTIONS.values())
-        _scheme_embeddings = model.encode(texts, convert_to_tensor=True)
+        if model is None:
+            return None
+        try:
+            texts = list(SCHEME_DESCRIPTIONS.values())
+            _scheme_embeddings = model.encode(texts, convert_to_tensor=True)
+        except Exception:
+            return None
     return _scheme_embeddings
 
 
@@ -108,16 +111,17 @@ def _get_doc_type_embeddings():
     global _doc_type_embeddings
     if _doc_type_embeddings is None:
         model = get_model()
-        texts = list(DOCUMENT_TYPE_DESCRIPTIONS.values())
-        _doc_type_embeddings = model.encode(texts, convert_to_tensor=True)
+        if model is None:
+            return None
+        try:
+            texts = list(DOCUMENT_TYPE_DESCRIPTIONS.values())
+            _doc_type_embeddings = model.encode(texts, convert_to_tensor=True)
+        except Exception:
+            return None
     return _doc_type_embeddings
 
 
 def classify_with_indic_bert(ocr_text: str) -> Dict[str, Any]:
-    """
-    Classify document type and scheme using multilingual
-    sentence embeddings with cosine similarity.
-    """
     if not ocr_text or len(ocr_text.strip()) < 10:
         return {
             "document_type": "APPLICATION_FORM",
@@ -126,46 +130,40 @@ def classify_with_indic_bert(ocr_text: str) -> Dict[str, Any]:
             "doc_type_confidence": 0.0,
             "method": "multilingual-bert",
         }
-
     try:
+        import torch
+        from sentence_transformers import util
+
         model = get_model()
+        if model is None:
+            raise Exception("Model not available")
 
-        # Use first 500 chars
         text = ocr_text[:500]
-
-        # Encode query
         query_embedding = model.encode(text, convert_to_tensor=True)
 
-        # --- Scheme classification ---
+        # Scheme classification
         scheme_embeddings = _get_scheme_embeddings()
+        if scheme_embeddings is None:
+            raise Exception("Scheme embeddings not available")
         scheme_scores = util.cos_sim(query_embedding, scheme_embeddings)[0]
-        scheme_scores_list = scheme_scores.tolist()
-
-        # Softmax for confidence
-        scheme_tensor = torch.tensor(scheme_scores_list)
-        scheme_softmax = torch.softmax(scheme_tensor * 10, dim=0)
+        scheme_softmax = torch.softmax(torch.tensor(scheme_scores.tolist()) * 10, dim=0)
         best_scheme_idx = scheme_softmax.argmax().item()
         best_scheme = list(SCHEME_DESCRIPTIONS.keys())[best_scheme_idx]
         scheme_confidence = round(scheme_softmax[best_scheme_idx].item(), 3)
 
-        # --- Document type classification ---
+        # Doc type classification
         doc_type_embeddings = _get_doc_type_embeddings()
+        if doc_type_embeddings is None:
+            raise Exception("Doc type embeddings not available")
         doc_type_scores = util.cos_sim(query_embedding, doc_type_embeddings)[0]
-        doc_type_scores_list = doc_type_scores.tolist()
-
-        doc_type_tensor = torch.tensor(doc_type_scores_list)
-        doc_type_softmax = torch.softmax(doc_type_tensor * 10, dim=0)
+        doc_type_softmax = torch.softmax(torch.tensor(doc_type_scores.tolist()) * 10, dim=0)
         best_doc_type_idx = doc_type_softmax.argmax().item()
         best_doc_type = list(DOCUMENT_TYPE_DESCRIPTIONS.keys())[best_doc_type_idx]
         doc_type_confidence = round(doc_type_softmax[best_doc_type_idx].item(), 3)
 
-        log.info(
-            "indic_bert.classified",
-            scheme=best_scheme,
-            scheme_conf=scheme_confidence,
-            doc_type=best_doc_type,
-            doc_type_conf=doc_type_confidence,
-        )
+        log.info("indic_bert.classified",
+                 scheme=best_scheme, scheme_conf=scheme_confidence,
+                 doc_type=best_doc_type, doc_type_conf=doc_type_confidence)
 
         return {
             "document_type": best_doc_type,
@@ -177,10 +175,11 @@ def classify_with_indic_bert(ocr_text: str) -> Dict[str, Any]:
 
     except Exception as e:
         log.error("indic_bert.classification_failed", error=str(e))
+        # Graceful fallback — app keeps working
         return {
             "document_type": "APPLICATION_FORM",
             "scheme_id": "unknown",
             "confidence": 0.0,
             "doc_type_confidence": 0.0,
-            "method": "multilingual-bert-failed",
+            "method": "rule-based-fallback",
         }
